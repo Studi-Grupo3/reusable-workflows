@@ -1,0 +1,53 @@
+name: Studi/Back-End
+
+on:
+  workflow_call: {}
+
+jobs:
+  build-and-package:
+    name: Build, Test and Package (Maven)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21 (Corretto)
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: 'corretto'
+          cache: 'maven'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+
+      - name: Build project (runs tests)
+        run: mvn -B clean package
+
+      - name: Find jar and copy to artifacts/
+        run: |
+          mkdir -p artifacts
+          ART_JAR=$(ls target/*.jar 2>/dev/null | grep -v -E '(-original|-sources)' | head -n1 || true)
+
+          if [ -z "$ART_JAR" ]; then
+            echo "Nenhum JAR executável encontrado em target/. Listando target/:"
+            ls -la target || true
+            exit 1
+          fi
+
+          cp "$ART_JAR" artifacts/app.jar
+          ls -lh artifacts/app.jar
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: artifacts/app.jar
