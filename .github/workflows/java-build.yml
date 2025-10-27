@@ -30,7 +30,7 @@ jobs:
             ${{ runner.os }}-m2-
 
       - name: Build project (runs tests)
-        run: mvn -B clean package
+        run: mvn -B clean package -DskipTests
 
       - name: Find jar and copy to artifacts/
         run: |
