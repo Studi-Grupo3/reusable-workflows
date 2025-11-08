@@ -79,4 +79,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-build
-          path: artifacts/build.tar.gz
+          path: artifacts/frontend-build.tar.gz

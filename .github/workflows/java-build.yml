@@ -1,7 +1,13 @@
 name: Studi/Back-End
 
 on:
-  workflow_call: {}
+  workflow_call:
+  inputs:
+      artifact_name:
+        description: 'Nome do JAR a ser gerado no artifacts (ex: backend-app.jar ou api-consumer.jar)'
+        required: false
+        type: string
+        default: 'backend-app.jar'
 
 jobs:
   build-and-package:
@@ -43,11 +49,11 @@ jobs:
             exit 1
           fi
 
-          cp "$ART_JAR" artifacts/app.jar
-          ls -lh artifacts/app.jar
+          cp "$ART_JAR" "artifacts/${{ inputs.artifact_name }}"
+          ls -lh "artifacts/${{ inputs.artifact_name }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-build
-          path: artifacts/app.jar
+          path: artifacts/${{ inputs.artifact_name }}
