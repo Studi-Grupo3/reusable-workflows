@@ -1,0 +1,134 @@
+name: Reusable - Upload artifacts to GitHub Release
+
+on:
+  workflow_call:
+    inputs:
+      artifacts:
+        description: 'Lista de paths para upload (separados por vírgula). Ex: artifacts/app-api.jar,artifacts/other.bin'
+        required: true
+        type: string
+      target_owner:
+        description: 'Owner do repo onde o Release será criado/atualizado (ex: Studi-Grupo3)'
+        required: true
+        type: string
+      target_repo:
+        description: 'Repo alvo para o Release (ex: artifacts)'
+        required: true
+        type: string
+      tag:
+        description: 'Tag do release. Se vazio, será usado v{run_number}'
+        required: false
+        type: string
+        default: ''
+      commit:
+        description: 'Branch/commit alvo para criar a tag se criar release (default: main)'
+        required: false
+        type: string
+        default: 'main'
+      release_title:
+        description: 'Título do release'
+        required: false
+        type: string
+        default: ''
+      release_notes:
+        description: 'Notas do release'
+        required: false
+        type: string
+        default: 'Release automática via workflow'
+      create_if_missing:
+        description: 'If true, create the release when it does not exist'
+        required: false
+        type: boolean
+        default: true
+      clobber:
+        description: 'If true, upload will replace existing assets with same name'
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      RELEASE_PAT:
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  upload:
+    name: Upload artifacts to GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          echo "Artifacts: ${{ inputs.artifacts }}"
+          echo "Target: ${{ inputs.target_owner }}/${{ inputs.target_repo }}"
+          echo "Tag input: '${{ inputs.tag }}'"
+
+      - name: Prepare environment
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          # ensure gh is available
+          gh --version || (echo "gh not available on runner" && exit 1)
+
+      - name: Resolve tag
+        id: resolve_tag
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # fallback to v{run_number}
+            echo "tag=v${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Ensure release exists (optional)
+        if: ${{ inputs.create_if_missing }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve_tag.outputs.tag }}"
+          OWNER="${{ inputs.target_owner }}"
+          REPO="${{ inputs.target_repo }}"
+          # check exist
+          if gh release view "$TAG" -R "$OWNER/$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG já existe em $OWNER/$REPO"
+          else
+            echo "Criando release $TAG em $OWNER/$REPO (target: ${{ inputs.commit }})"
+            gh release create "$TAG" --repo "$OWNER/$REPO" --target "${{ inputs.commit }}" --title "${{ inputs.release_title || 'Release ' + TAG }}" --notes "${{ inputs.release_notes }}"
+          fi
+
+      - name: Upload artifacts
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve_tag.outputs.tag }}"
+          OWNER="${{ inputs.target_owner }}"
+          REPO="${{ inputs.target_repo }}"
+          CLOBBER_FLAG=""
+          if [ "${{ inputs.clobber }}" = "true" ]; then CLOBBER_FLAG="--clobber"; fi
+
+          # Split artifacts by comma and upload each
+          IFS=',' read -r -a ARR <<< "${{ inputs.artifacts }}"
+          for path in "${ARR[@]}"; do
+            # trim whitespace
+            path="$(echo "$path" | xargs)"
+            if [ -z "$path" ]; then
+              echo "Ignorando entry vazia"
+              continue
+            fi
+            if [ ! -f "$path" ]; then
+              echo "ERRO: arquivo não encontrado: $path" >&2
+              exit 2
+            fi
+            echo "Uploading $path to $OWNER/$REPO release $TAG"
+            gh release upload "$TAG" "$path" --repo "$OWNER/$REPO" $CLOBBER_FLAG
+          done
+
+      - name: Done
+        run: echo "Upload finalizado"

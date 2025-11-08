@@ -1,0 +1,101 @@
+name: Reusable - Download artifacts from GitHub Release
+
+on:
+  workflow_call:
+    inputs:
+      target_owner:
+        description: 'Owner do repo onde o Release está (ex: Studi-Grupo3)'
+        required: true
+        type: string
+      target_repo:
+        description: 'Repo onde o Release está (ex: artifacts)'
+        required: true
+        type: string
+      tag:
+        description: 'Tag do release a baixar (use "latest" para pegar latest)'
+        required: false
+        type: string
+        default: 'latest'
+      patterns:
+        description: 'Nomes/padrões de assets a baixar (separados por vírgula). Ex: app-api.jar,api-consumer.jar,build.tar.gz'
+        required: true
+        type: string
+      dest_dir:
+        description: 'Diretório destino relativo ao workspace (default builds/)'
+        required: false
+        type: string
+        default: 'builds'
+      move_to_ansible:
+        description: 'Se true, tentará copiar os arquivos para ansible-project/builds/... (caso exista)'
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      RELEASE_READ_PAT:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    name: Download artifacts from Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Prepare directories
+        run: |
+          mkdir -p "${{ inputs.dest_dir }}"
+          mkdir -p "${{ inputs.dest_dir }}/backend"
+          mkdir -p "${{ inputs.dest_dir }}/frontend"
+          ls -la "${{ inputs.dest_dir }}" || true
+
+      - name: Authenticate gh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_READ_PAT }}
+        run: |
+          gh auth status || echo "gh auth status failed (token pode estar ausente) - continue se público"
+
+      - name: Download assets
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_READ_PAT }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          OWNER="${{ inputs.target_owner }}"
+          REPO="${{ inputs.target_repo }}"
+          DEST="${{ inputs.dest_dir }}"
+
+          if [ -z "$TAG" ]; then TAG="latest"; fi
+          IFS=',' read -r -a ARR <<< "${{ inputs.patterns }}"
+
+          for pattern in "${ARR[@]}"; do
+            pattern="$(echo "$pattern" | xargs)"
+            if [ -z "$pattern" ]; then continue; fi
+
+            echo "Tentando baixar padrão '$pattern' do $OWNER/$REPO@$TAG para $DEST"
+            # gh release download aceita -p pattern e -D dest
+            if gh release download "$TAG" -R "$OWNER/$REPO" -p "$pattern" -D "$DEST" 2>/dev/null; then
+              echo "Baixado: pattern $pattern"
+            else
+              echo "Warning: pattern $pattern não encontrado no release $TAG (ou erro de permissões)"
+            fi
+          done
+
+      - name: Optionally move to ansible-project/builds
+        if: ${{ inputs.move_to_ansible }}
+        run: |
+          if [ -d ansible-project ]; then
+            mkdir -p ansible-project/builds/backend ansible-project/builds/frontend
+            cp -v ${ { inputs.dest_dir } }/backend/* ansible-project/builds/backend/ 2>/dev/null || true
+            cp -v ${ { inputs.dest_dir } }/frontend/* ansible-project/builds/frontend/ 2>/dev/null || true
+            echo "Se existia ansible-project, arquivos copiados"
+          else
+            echo "ansible-project não existe no workspace - ignorando cópia"
+          fi
+
+      - name: Summary
+        run: |
+          echo "Conteúdo de ${{ inputs.dest_dir }}:"
+          ls -la "${{ inputs.dest_dir }}" || true
