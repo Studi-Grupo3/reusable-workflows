@@ -1,134 +1,119 @@
-name: Reusable - Upload artifacts to GitHub Release
+name: Reusable - Upload single artifact to GitHub Release (simple)
 
 on:
   workflow_call:
     inputs:
-      artifacts:
-        description: 'Lista de paths para upload (separados por vírgula). Ex: artifacts/app-api.jar,artifacts/other.bin'
+      artifact_path:
         required: true
         type: string
-      target_owner:
-        description: 'Owner do repo onde o Release será criado/atualizado (ex: Studi-Grupo3)'
+        description: 'Caminho do arquivo no workspace (ex: artifacts/app-api.jar)'
+      target_owner_repo:
         required: true
         type: string
-      target_repo:
-        description: 'Repo alvo para o Release (ex: artifacts)'
-        required: true
-        type: string
+        description: 'Owner/repo destino (ex: Studi-Grupo3/artifacts)'
       tag:
-        description: 'Tag do release. Se vazio, será usado v{run_number}'
         required: false
         type: string
         default: ''
-      commit:
-        description: 'Branch/commit alvo para criar a tag se criar release (default: main)'
-        required: false
-        type: string
-        default: 'main'
-      release_title:
-        description: 'Título do release'
-        required: false
-        type: string
-        default: ''
-      release_notes:
-        description: 'Notas do release'
-        required: false
-        type: string
-        default: 'Release automática via workflow'
-      create_if_missing:
-        description: 'If true, create the release when it does not exist'
-        required: false
-        type: boolean
-        default: true
-      clobber:
-        description: 'If true, upload will replace existing assets with same name'
-        required: false
-        type: boolean
-        default: true
+        description: 'Tag do release (ex: v1.2.3). Se vazio, usa v{run_number}'
+
+    outputs:
+      release_tag:
+        description: 'Tag utilizada no release'
 
     secrets:
       RELEASE_PAT:
-        required: true
+        required: false
 
 permissions:
   contents: write
 
 jobs:
   upload:
-    name: Upload artifacts to GitHub Release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Validate inputs
+      - name: Verificar gh CLI
         run: |
           set -euo pipefail
-          echo "Artifacts: ${{ inputs.artifacts }}"
-          echo "Target: ${{ inputs.target_owner }}/${{ inputs.target_repo }}"
-          echo "Tag input: '${{ inputs.tag }}'"
+          gh --version || (echo "gh CLI não disponível no runner" && exit 1)
 
-      - name: Prepare environment
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
-        run: |
-          set -euo pipefail
-          # ensure gh is available
-          gh --version || (echo "gh not available on runner" && exit 1)
-
-      - name: Resolve tag
+      - name: Resolver tag
         id: resolve_tag
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.tag }}" ]; then
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            TAG="${{ inputs.tag }}"
           else
-            # fallback to v{run_number}
-            echo "tag=v${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+            TAG="v${GITHUB_RUN_NUMBER}"
           fi
+          echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Usando tag: $TAG"
 
-      - name: Ensure release exists (optional)
-        if: ${{ inputs.create_if_missing }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+      - name: Escolher token (GITHUB_TOKEN se destino == repo atual, senão RELEASE_PAT)
+        id: choose_token
         run: |
           set -euo pipefail
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
-          OWNER="${{ inputs.target_owner }}"
-          REPO="${{ inputs.target_repo }}"
-          # check exist
-          if gh release view "$TAG" -R "$OWNER/$REPO" >/dev/null 2>&1; then
-            echo "Release $TAG já existe em $OWNER/$REPO"
+          TARGET="${{ inputs.target_owner_repo }}"
+          CURRENT="${{ github.repository }}"
+          echo "TARGET=$TARGET; CURRENT=$CURRENT"
+          if [ "$TARGET" = "$CURRENT" ]; then
+            echo "using_github_token=true" >> $GITHUB_OUTPUT
+            echo "token_value=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
           else
-            echo "Criando release $TAG em $OWNER/$REPO (target: ${{ inputs.commit }})"
-            gh release create "$TAG" --repo "$OWNER/$REPO" --target "${{ inputs.commit }}" --title "${{ inputs.release_title || 'Release ' + TAG }}" --notes "${{ inputs.release_notes }}"
+            # RELEASE_PAT pode não estar definido — nesse caso falhar
+            if [ -z "${{ secrets.RELEASE_PAT }}" ]; then
+              echo "using_github_token=false" >> $GITHUB_OUTPUT
+              echo "token_value=" >> $GITHUB_OUTPUT
+              echo "ERROR_NO_RELEASE_PAT=1" >> $GITHUB_OUTPUT
+            else
+              echo "using_github_token=false" >> $GITHUB_OUTPUT
+              echo "token_value=${{ secrets.RELEASE_PAT }}" >> $GITHUB_OUTPUT
+              echo "ERROR_NO_RELEASE_PAT=0" >> $GITHUB_OUTPUT
+            fi
           fi
 
-      - name: Upload artifacts
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+      - name: Validar token e artifact
         run: |
           set -euo pipefail
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
-          OWNER="${{ inputs.target_owner }}"
-          REPO="${{ inputs.target_repo }}"
-          CLOBBER_FLAG=""
-          if [ "${{ inputs.clobber }}" = "true" ]; then CLOBBER_FLAG="--clobber"; fi
+          TAG="${{ steps.resolve_tag.outputs.release_tag }}"
+          TARGET="${{ inputs.target_owner_repo }}"
+          ART="${{ inputs.artifact_path }}"
+          NO_PAT="${{ steps.choose_token.outputs.ERROR_NO_RELEASE_PAT }}"
 
-          # Split artifacts by comma and upload each
-          IFS=',' read -r -a ARR <<< "${{ inputs.artifacts }}"
-          for path in "${ARR[@]}"; do
-            # trim whitespace
-            path="$(echo "$path" | xargs)"
-            if [ -z "$path" ]; then
-              echo "Ignorando entry vazia"
-              continue
-            fi
-            if [ ! -f "$path" ]; then
-              echo "ERRO: arquivo não encontrado: $path" >&2
-              exit 2
-            fi
-            echo "Uploading $path to $OWNER/$REPO release $TAG"
-            gh release upload "$TAG" "$path" --repo "$OWNER/$REPO" $CLOBBER_FLAG
-          done
+          if [ "$NO_PAT" = "1" ]; then
+            echo "ERRO: upload cross-repo (target != current repo) requer secret RELEASE_PAT no caller." >&2
+            exit 1
+          fi
 
-      - name: Done
-        run: echo "Upload finalizado"
+          if [ ! -f "$ART" ]; then
+            echo "ERRO: artifact nao encontrado em: $ART" >&2
+            exit 2
+          fi
+
+          echo "Pronto para upload: $ART -> $TARGET@$TAG"
+
+      - name: Exportar token p/ gh e criar/upload release
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve_tag.outputs.release_tag }}"
+          TARGET="${{ inputs.target_owner_repo }}"
+          ART="${{ inputs.artifact_path }}"
+          TOKEN="${{ steps.choose_token.outputs.token_value }}"
+
+          export GH_TOKEN="$TOKEN"
+
+          # criar release se não existir
+          if gh release view "$TAG" -R "$TARGET" >/dev/null 2>&1; then
+            echo "Release $TAG já existe em $TARGET"
+          else
+            echo "Criando release $TAG em $TARGET"
+            gh release create "$TAG" --repo "$TARGET" --title "Release $TAG" --notes "Automated release"
+          fi
+
+          echo "Upload (clobber) $ART -> $TARGET@$TAG"
+          gh release upload "$TAG" "$ART" --repo "$TARGET" --clobber
+
+      - name: Expor output release_tag
+        run: |
+          echo "release_tag=${{ steps.resolve_tag.outputs.release_tag }}" >> $GITHUB_OUTPUT

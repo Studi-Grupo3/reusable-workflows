@@ -1,101 +1,96 @@
-name: Reusable - Download artifacts from GitHub Release
+name: Reusable - Download artifacts from GitHub Release (simple)
 
 on:
   workflow_call:
     inputs:
-      target_owner:
-        description: 'Owner do repo onde o Release está (ex: Studi-Grupo3)'
+      target_owner_repo:
         required: true
         type: string
-      target_repo:
-        description: 'Repo onde o Release está (ex: artifacts)'
-        required: true
-        type: string
+        description: 'Owner/repo do release (ex: Studi-Grupo3/artifacts)'
       tag:
-        description: 'Tag do release a baixar (use "latest" para pegar latest)'
         required: false
         type: string
         default: 'latest'
+        description: 'Tag ou "latest"'
       patterns:
-        description: 'Nomes/padrões de assets a baixar (separados por vírgula). Ex: app-api.jar,api-consumer.jar,build.tar.gz'
         required: true
         type: string
+        description: 'Padrões separados por vírgula, ex: app-api.jar,api-consumer.jar,build.tar.gz'
       dest_dir:
-        description: 'Diretório destino relativo ao workspace (default builds/)'
         required: false
         type: string
         default: 'builds'
-      move_to_ansible:
-        description: 'Se true, tentará copiar os arquivos para ansible-project/builds/... (caso exista)'
-        required: false
-        type: boolean
-        default: true
+        description: 'Diretório destino local'
 
     secrets:
       RELEASE_READ_PAT:
-        required: true
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   download:
-    name: Download artifacts from Release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Prepare directories
+      - name: Preparar destino
         run: |
-          mkdir -p "${{ inputs.dest_dir }}"
-          mkdir -p "${{ inputs.dest_dir }}/backend"
-          mkdir -p "${{ inputs.dest_dir }}/frontend"
-          ls -la "${{ inputs.dest_dir }}" || true
+          set -euo pipefail
+          DEST="${{ inputs.dest_dir }}"
+          mkdir -p "$DEST"
+          echo "Destino: $DEST"
 
-      - name: Authenticate gh
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_READ_PAT }}
+      - name: Escolher token (GITHUB_TOKEN se destino == repo atual, senão RELEASE_READ_PAT)
+        id: choose_token
         run: |
-          gh auth status || echo "gh auth status failed (token pode estar ausente) - continue se público"
+          set -euo pipefail
+          TARGET="${{ inputs.target_owner_repo }}"
+          CURRENT="${{ github.repository }}"
+          echo "TARGET=$TARGET; CURRENT=$CURRENT"
+          if [ "$TARGET" = "$CURRENT" ]; then
+            echo "using_github_token=true" >> $GITHUB_OUTPUT
+            echo "token_value=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          else
+            if [ -z "${{ secrets.RELEASE_READ_PAT }}" ]; then
+              echo "using_github_token=false" >> $GITHUB_OUTPUT
+              echo "token_value=" >> $GITHUB_OUTPUT
+              echo "ERROR_NO_READ_PAT=1" >> $GITHUB_OUTPUT
+            else
+              echo "using_github_token=false" >> $GITHUB_OUTPUT
+              echo "token_value=${{ secrets.RELEASE_READ_PAT }}" >> $GITHUB_OUTPUT
+              echo "ERROR_NO_READ_PAT=0" >> $GITHUB_OUTPUT
+            fi
+          fi
 
-      - name: Download assets
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_READ_PAT }}
+      - name: Validar token
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.choose_token.outputs.ERROR_NO_READ_PAT || '0' }}" = "1" ]; then
+            echo "ERRO: download cross-repo requer RELEASE_READ_PAT no caller." >&2
+            exit 1
+          fi
+
+      - name: Baixar patterns
         run: |
           set -euo pipefail
           TAG="${{ inputs.tag }}"
-          OWNER="${{ inputs.target_owner }}"
-          REPO="${{ inputs.target_repo }}"
+          TARGET="${{ inputs.target_owner_repo }}"
           DEST="${{ inputs.dest_dir }}"
+          TOKEN="${{ steps.choose_token.outputs.token_value }}"
+          export GH_TOKEN="$TOKEN"
 
-          if [ -z "$TAG" ]; then TAG="latest"; fi
-          IFS=',' read -r -a ARR <<< "${{ inputs.patterns }}"
-
-          for pattern in "${ARR[@]}"; do
-            pattern="$(echo "$pattern" | xargs)"
-            if [ -z "$pattern" ]; then continue; fi
-
-            echo "Tentando baixar padrão '$pattern' do $OWNER/$REPO@$TAG para $DEST"
-            # gh release download aceita -p pattern e -D dest
-            if gh release download "$TAG" -R "$OWNER/$REPO" -p "$pattern" -D "$DEST" 2>/dev/null; then
-              echo "Baixado: pattern $pattern"
+          IFS=',' read -r -a PATS <<< "${{ inputs.patterns }}"
+          for p in "${PATS[@]}"; do
+            pat="$(echo "$p" | xargs)"
+            if [ -z "$pat" ]; then continue; fi
+            echo "Tentando baixar '$pat' de $TARGET@$TAG para $DEST"
+            if gh release download "$TAG" -R "$TARGET" -p "$pat" -D "$DEST" 2>/dev/null; then
+              echo "OK: $pat"
             else
-              echo "Warning: pattern $pattern não encontrado no release $TAG (ou erro de permissões)"
+              echo "WARN: $pat não encontrado em $TARGET@$TAG"
             fi
           done
 
-      - name: Optionally move to ansible-project/builds
-        if: ${{ inputs.move_to_ansible }}
-        run: |
-          if [ -d ansible-project ]; then
-            mkdir -p ansible-project/builds/backend ansible-project/builds/frontend
-            cp -v ${ { inputs.dest_dir } }/backend/* ansible-project/builds/backend/ 2>/dev/null || true
-            cp -v ${ { inputs.dest_dir } }/frontend/* ansible-project/builds/frontend/ 2>/dev/null || true
-            echo "Se existia ansible-project, arquivos copiados"
-          else
-            echo "ansible-project não existe no workspace - ignorando cópia"
-          fi
-
-      - name: Summary
-        run: |
-          echo "Conteúdo de ${{ inputs.dest_dir }}:"
-          ls -la "${{ inputs.dest_dir }}" || true
+      - name: Listar conteudo destino
+        run: ls -la "${{ inputs.dest_dir }}" || true
