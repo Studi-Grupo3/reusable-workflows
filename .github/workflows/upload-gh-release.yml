@@ -1,4 +1,4 @@
-name: Reusable - Upload single artifact to GitHub Release (simple)
+name: Reusable - Upload single artifact to GitHub Release (minimal)
 
 on:
   workflow_call:
@@ -6,11 +6,11 @@ on:
       artifact_name:
         required: true
         type: string
-        description: 'Nome do artifact (valor usado em actions/upload-artifact name), ex: backend-app.jar ou app-build'
+        description: 'Nome do artifact (usado em actions/upload-artifact name), ex: app-build ou backend-app.jar'
       target_owner_repo:
         required: true
         type: string
-        description: 'Owner/repo destino (ex: Studi-Grupo3/artifacts)'
+        description: 'Owner/repo destino, ex: Studi-Grupo3/artifacts'
       tag:
         required: false
         type: string
@@ -22,7 +22,7 @@ on:
         value: ${{ jobs.upload.outputs.release_tag }}
     secrets:
       RELEASE_PAT:
-        required: false
+        required: true
 
 permissions:
   contents: write
@@ -34,12 +34,15 @@ jobs:
       release_tag: ${{ steps.resolve_tag.outputs.release_tag }}
 
     steps:
-      - name: Verificar gh CLI
+      - name: Install gh CLI if missing
         run: |
           set -euo pipefail
-          gh --version || (echo "gh CLI não disponível no runner" && exit 1)
+          if ! command -v gh >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gh
+          fi
 
-      - name: Resolver tag
+      - name: Resolve tag
         id: resolve_tag
         run: |
           set -euo pipefail
@@ -49,78 +52,40 @@ jobs:
             TAG="v${GITHUB_RUN_NUMBER}"
           fi
           echo "release_tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Usando tag: $TAG"
 
-      - name: Escolher token (GITHUB_TOKEN se destino == repo atual, senão RELEASE_PAT)
-        id: choose_token
-        run: |
-          set -euo pipefail
-          TARGET="${{ inputs.target_owner_repo }}"
-          CURRENT="${{ github.repository }}"
-          if [ "$TARGET" = "$CURRENT" ]; then
-            echo "using_github_token=true" >> $GITHUB_OUTPUT
-            echo "token_value=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
-            echo "ERROR_NO_RELEASE_PAT=0" >> $GITHUB_OUTPUT
-          else
-            if [ -z "${{ secrets.RELEASE_PAT }}" ]; then
-              echo "using_github_token=false" >> $GITHUB_OUTPUT
-              echo "token_value=" >> $GITHUB_OUTPUT
-              echo "ERROR_NO_RELEASE_PAT=1" >> $GITHUB_OUTPUT
-            else
-              echo "using_github_token=false" >> $GITHUB_OUTPUT
-              echo "token_value=${{ secrets.RELEASE_PAT }}" >> $GITHUB_OUTPUT
-              echo "ERROR_NO_RELEASE_PAT=0" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Download artifact (must have been uploaded previously)
+      - name: Download artifact (must have been uploaded earlier)
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}
           path: artifacts/
 
-      - name: Selecionar arquivo dentro do artifact baixado
+      - name: Select first file inside downloaded artifact
         id: select_file
         run: |
           set -euo pipefail
-          # procura o primeiro arquivo regular dentro de artifacts/
           FILE=$(find artifacts -type f -print -quit || true)
           if [ -z "$FILE" ]; then
-            echo "ERRO: nenhum arquivo encontrado dentro do artifact baixado (artifacts/). Verifique o nome do artifact_name fornecido." >&2
+            echo "No file found inside downloaded artifact 'artifacts/'" >&2
             exit 2
           fi
           echo "artifact_selected=$FILE" >> $GITHUB_OUTPUT
-          echo "Selected artifact: $FILE"
 
-      - name: Validar token (cross-repo)
-        run: |
-          set -euo pipefail
-          NO_PAT="${{ steps.choose_token.outputs.ERROR_NO_RELEASE_PAT }}"
-          if [ "$NO_PAT" = "1" ]; then
-            echo "ERRO: upload cross-repo (target != current repo) requer secret RELEASE_PAT no caller." >&2
-            exit 1
-          fi
-
-      - name: Criar/atualizar release e upload do arquivo
+      - name: Create (if needed) and upload to release
         run: |
           set -euo pipefail
           TAG="${{ steps.resolve_tag.outputs.release_tag }}"
           TARGET="${{ inputs.target_owner_repo }}"
           ART="${{ steps.select_file.outputs.artifact_selected }}"
-          TOKEN="${{ steps.choose_token.outputs.token_value }}"
-
-          export GH_TOKEN="$TOKEN"
+          export GH_TOKEN="${{ secrets.RELEASE_PAT }}"
 
           if gh release view "$TAG" -R "$TARGET" >/dev/null 2>&1; then
-            echo "Release $TAG já existe em $TARGET"
+            echo "Release $TAG already exists in $TARGET"
           else
-            echo "Criando release $TAG em $TARGET"
             gh release create "$TAG" --repo "$TARGET" --title "Release $TAG" --notes "Automated release"
           fi
 
-          echo "Upload (clobber) $ART -> $TARGET@$TAG"
           gh release upload "$TAG" "$ART" --repo "$TARGET" --clobber
 
-      - name: Expor output release_tag
+      - name: Expose release_tag
         run: |
           echo "release_tag=${{ steps.resolve_tag.outputs.release_tag }}" >> $GITHUB_OUTPUT
