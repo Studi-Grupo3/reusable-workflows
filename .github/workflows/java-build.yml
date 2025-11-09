@@ -2,13 +2,13 @@ name: Studi/Back-End
 
 on:
   workflow_call:
-  inputs:
+    inputs:
       artifact_name:
         description: 'Nome do JAR a ser gerado no artifacts (ex: backend-app.jar ou api-consumer.jar)'
         required: false
         type: string
         default: 'backend-app.jar'
-
+        
 jobs:
   build-and-package:
     name: Build, Test and Package (Maven)
