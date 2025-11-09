@@ -16,11 +16,10 @@ on:
         type: string
         default: ''
         description: 'Tag do release (ex: v1.2.3). Se vazio, usa v{run_number}'
-
     outputs:
       release_tag:
         description: 'Tag utilizada no release'
-
+        value: ${{ jobs.upload.outputs.release_tag }}
     secrets:
       RELEASE_PAT:
         required: false
@@ -31,7 +30,8 @@ permissions:
 jobs:
   upload:
     runs-on: ubuntu-latest
-
+    outputs:
+      release_tag: ${{ steps.resolve_tag.outputs.release_tag }}
     steps:
       - name: Verificar gh CLI
         run: |
