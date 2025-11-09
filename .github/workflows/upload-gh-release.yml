@@ -3,10 +3,10 @@ name: Reusable - Upload single artifact to GitHub Release (simple)
 on:
   workflow_call:
     inputs:
-      artifact_path:
+      artifact_name:
         required: true
         type: string
-        description: 'Caminho do arquivo no workspace (ex: artifacts/app-api.jar)'
+        description: 'Nome do artifact (valor usado em actions/upload-artifact name), ex: backend-app.jar ou app-build'
       target_owner_repo:
         required: true
         type: string
@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.resolve_tag.outputs.release_tag }}
+
     steps:
       - name: Verificar gh CLI
         run: |
@@ -56,12 +57,11 @@ jobs:
           set -euo pipefail
           TARGET="${{ inputs.target_owner_repo }}"
           CURRENT="${{ github.repository }}"
-          echo "TARGET=$TARGET; CURRENT=$CURRENT"
           if [ "$TARGET" = "$CURRENT" ]; then
             echo "using_github_token=true" >> $GITHUB_OUTPUT
             echo "token_value=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+            echo "ERROR_NO_RELEASE_PAT=0" >> $GITHUB_OUTPUT
           else
-            # RELEASE_PAT pode não estar definido — nesse caso falhar
             if [ -z "${{ secrets.RELEASE_PAT }}" ]; then
               echo "using_github_token=false" >> $GITHUB_OUTPUT
               echo "token_value=" >> $GITHUB_OUTPUT
@@ -73,37 +73,44 @@ jobs:
             fi
           fi
 
-      - name: Validar token e artifact
+      - name: Download artifact (must have been uploaded previously)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: artifacts/
+
+      - name: Selecionar arquivo dentro do artifact baixado
+        id: select_file
         run: |
           set -euo pipefail
-          TAG="${{ steps.resolve_tag.outputs.release_tag }}"
-          TARGET="${{ inputs.target_owner_repo }}"
-          ART="${{ inputs.artifact_path }}"
-          NO_PAT="${{ steps.choose_token.outputs.ERROR_NO_RELEASE_PAT }}"
+          # procura o primeiro arquivo regular dentro de artifacts/
+          FILE=$(find artifacts -type f -print -quit || true)
+          if [ -z "$FILE" ]; then
+            echo "ERRO: nenhum arquivo encontrado dentro do artifact baixado (artifacts/). Verifique o nome do artifact_name fornecido." >&2
+            exit 2
+          fi
+          echo "artifact_selected=$FILE" >> $GITHUB_OUTPUT
+          echo "Selected artifact: $FILE"
 
+      - name: Validar token (cross-repo)
+        run: |
+          set -euo pipefail
+          NO_PAT="${{ steps.choose_token.outputs.ERROR_NO_RELEASE_PAT }}"
           if [ "$NO_PAT" = "1" ]; then
             echo "ERRO: upload cross-repo (target != current repo) requer secret RELEASE_PAT no caller." >&2
             exit 1
           fi
 
-          if [ ! -f "$ART" ]; then
-            echo "ERRO: artifact nao encontrado em: $ART" >&2
-            exit 2
-          fi
-
-          echo "Pronto para upload: $ART -> $TARGET@$TAG"
-
-      - name: Exportar token p/ gh e criar/upload release
+      - name: Criar/atualizar release e upload do arquivo
         run: |
           set -euo pipefail
           TAG="${{ steps.resolve_tag.outputs.release_tag }}"
           TARGET="${{ inputs.target_owner_repo }}"
-          ART="${{ inputs.artifact_path }}"
+          ART="${{ steps.select_file.outputs.artifact_selected }}"
           TOKEN="${{ steps.choose_token.outputs.token_value }}"
 
           export GH_TOKEN="$TOKEN"
 
-          # criar release se não existir
           if gh release view "$TAG" -R "$TARGET" >/dev/null 2>&1; then
             echo "Release $TAG já existe em $TARGET"
           else
