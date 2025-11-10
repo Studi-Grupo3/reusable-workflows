@@ -83,10 +83,17 @@ jobs:
           else
             gh release create "$TAG" --repo "$TARGET" --title "Release $TAG" --notes "Automated release"
           fi
-          
+
           ASSET_NAME="$(basename "$ART")"
-          echo "Uploading $ART as asset name: $ASSET_NAME (will replace asset with same name if exists)"
-          gh release upload "$TAG" "$ART" --repo "$TARGET" --clobber --name "$ASSET_NAME"
+          TMPDIR="$(mktemp -d)"
+          TARGET_PATH="$TMPDIR/$ASSET_NAME"
+          cp "$ART" "$TARGET_PATH"
+          echo "Uploading $TARGET_PATH as asset name: $ASSET_NAME (will replace asset with same name if exists)"
+
+          gh release upload "$TAG" "$TARGET_PATH" --repo "$TARGET" --clobber
+
+          rm -rf "$TMPDIR"
+
 
       - name: Expose release_tag
         run: |
