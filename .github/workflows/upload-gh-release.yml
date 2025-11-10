@@ -70,7 +70,7 @@ jobs:
           fi
           echo "artifact_selected=$FILE" >> $GITHUB_OUTPUT
 
-      - name: Create (if needed) and upload to release
+      - name: Create (if needed) and upload to release (clobber same-name asset only)
         run: |
           set -euo pipefail
           TAG="${{ steps.resolve_tag.outputs.release_tag }}"
@@ -83,8 +83,10 @@ jobs:
           else
             gh release create "$TAG" --repo "$TARGET" --title "Release $TAG" --notes "Automated release"
           fi
-
-          gh release upload "$TAG" "$ART" --repo "$TARGET" --clobber
+          
+          ASSET_NAME="$(basename "$ART")"
+          echo "Uploading $ART as asset name: $ASSET_NAME (will replace asset with same name if exists)"
+          gh release upload "$TAG" "$ART" --repo "$TARGET" --clobber --name "$ASSET_NAME"
 
       - name: Expose release_tag
         run: |
