@@ -70,34 +70,6 @@ jobs:
           fi
           echo "artifact_selected=$FILE" >> $GITHUB_OUTPUT
 
-      - name: Diagnóstico do token GH (temporário, remove depois)
-        env:
-          # se estiver usando secret RELEASE_PAT passe-o para GH_TOKEN
-          GH_TOKEN: ${{ secrets.RELEASE_PAT || '' }}
-          OWNER: "Studi-Grupo3"
-          REPO: "artifacts"
-        run: |
-          set -euo pipefail
-      
-          echo "==== VARS PRESENÇA (valores são mascarados por segurança) ===="
-          if [ -n "${GITHUB_TOKEN:-}" ]; then echo "GITHUB_TOKEN: defined"; else echo "GITHUB_TOKEN: NOT defined"; fi
-          if [ -n "${GH_TOKEN:-}" ]; then echo "GH_TOKEN: defined (length=${#GH_TOKEN})"; else echo "GH_TOKEN: NOT defined"; fi
-          echo ""
-      
-          echo "==== gh auth status ===="
-          # mostra qual conta está autenticada (não mostra token em claro)
-          gh auth status || true
-          echo ""
-      
-          echo "==== Quem é o token (usuario) via API /user ===="
-          # esta chamada retorna o usuário associado ao token (e falha se token inválido)
-          gh api /user -H "Accept: application/vnd.github+json" || { echo "Falha ao obter /user (token inválido ou sem permissão)"; exit 0; }
-          echo ""
-      
-          echo "==== Permissões do token para o repo alvo (/repos/OWNER/REPO) ===="
-          gh api /repos/$OWNER/$REPO -H "Accept: application/vnd.github+json" --jq '.permissions' || echo "Não foi possível obter permissoes (403/401)"
-          echo ""
-
       - name: Create (if needed) and upload to release
         run: |
           set -euo pipefail
